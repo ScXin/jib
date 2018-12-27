@@ -59,10 +59,10 @@ public class PluginConfigurationProcessor {
   @VisibleForTesting
   static class CommonInput {
 
-    private boolean containerizeWar;
-    private RawConfiguration rawConfiguration;
-    private InferredAuthProvider inferredAuthProvider;
-    private ProjectProperties projectProperties;
+    private final boolean containerizeWar;
+    private final RawConfiguration rawConfiguration;
+    private final InferredAuthProvider inferredAuthProvider;
+    private final ProjectProperties projectProperties;
 
     @VisibleForTesting
     CommonInput(
