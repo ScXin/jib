@@ -413,6 +413,7 @@ public class PluginConfigurationProcessor {
    * Configures a {@link Containerizer} with values pulled from project properties/raw build
    * configuration.
    *
+   * @param input static input including raw configuration data and project properties
    * @param containerizer the {@link Containerizer} to configure
    */
   private static void configureContainerizer(CommonInput input, Containerizer containerizer) {
