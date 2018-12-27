@@ -55,6 +55,28 @@ import javax.annotation.Nullable;
  */
 public class PluginConfigurationProcessor {
 
+  /** Simple bag of input values of static nature, for convenience in passing around them. */
+  @VisibleForTesting
+  static class CommonInput {
+
+    private boolean containerizeWar;
+    private RawConfiguration rawConfiguration;
+    private InferredAuthProvider inferredAuthProvider;
+    private ProjectProperties projectProperties;
+
+    @VisibleForTesting
+    CommonInput(
+        boolean containerizeWar,
+        RawConfiguration rawConfiguration,
+        InferredAuthProvider inferredAuthProvider,
+        ProjectProperties projectProperties) {
+      this.containerizeWar = containerizeWar;
+      this.projectProperties = projectProperties;
+      this.rawConfiguration = rawConfiguration;
+      this.inferredAuthProvider = inferredAuthProvider;
+    }
+  };
+
   /**
    * Gets the value of the {@code appRoot} parameter. If the parameter is empty, returns {@link
    * JavaLayerConfigurations#DEFAULT_WEB_APP_ROOT} for WAR projects or {@link
@@ -92,8 +114,10 @@ public class PluginConfigurationProcessor {
       throws InvalidImageReferenceException, MainClassInferenceException, InvalidAppRootException,
           InferredAuthRetrievalException, IOException, InvalidWorkingDirectoryException,
           InvalidContainerVolumeException {
-    ImageReference targetImageReference =
-        getGeneratedTargetDockerTag(rawConfiguration, projectProperties, helpfulSuggestions);
+    CommonInput input =
+        new CommonInput(containerizeWar, rawConfiguration, inferredAuthProvider, projectProperties);
+
+    ImageReference targetImageReference = getGeneratedTargetDockerTag(input, helpfulSuggestions);
     DockerDaemonImage targetImage = DockerDaemonImage.named(targetImageReference);
     if (dockerExecutable != null) {
       targetImage.setDockerExecutable(dockerExecutable);
@@ -103,14 +127,7 @@ public class PluginConfigurationProcessor {
     }
     Containerizer containerizer = Containerizer.to(targetImage);
 
-    return processCommonConfiguration(
-        rawConfiguration,
-        containerizeWar,
-        inferredAuthProvider,
-        projectProperties,
-        containerizer,
-        targetImageReference,
-        false);
+    return processCommonConfiguration(input, containerizer, targetImageReference, false);
   }
 
   public static PluginConfigurationProcessor processCommonConfigurationForTarImage(
@@ -123,19 +140,14 @@ public class PluginConfigurationProcessor {
       throws InvalidImageReferenceException, MainClassInferenceException, InvalidAppRootException,
           InferredAuthRetrievalException, IOException, InvalidWorkingDirectoryException,
           InvalidContainerVolumeException {
-    ImageReference targetImageReference =
-        getGeneratedTargetDockerTag(rawConfiguration, projectProperties, helpfulSuggestions);
+    CommonInput input =
+        new CommonInput(containerizeWar, rawConfiguration, inferredAuthProvider, projectProperties);
+
+    ImageReference targetImageReference = getGeneratedTargetDockerTag(input, helpfulSuggestions);
     TarImage targetImage = TarImage.named(targetImageReference).saveTo(tarImagePath);
     Containerizer containerizer = Containerizer.to(targetImage);
 
-    return processCommonConfiguration(
-        rawConfiguration,
-        containerizeWar,
-        inferredAuthProvider,
-        projectProperties,
-        containerizer,
-        targetImageReference,
-        false);
+    return processCommonConfiguration(input, containerizer, targetImageReference, false);
   }
 
   public static PluginConfigurationProcessor processCommonConfigurationForRegistryImage(
@@ -166,10 +178,8 @@ public class PluginConfigurationProcessor {
 
     PluginConfigurationProcessor processor =
         processCommonConfiguration(
-            rawConfiguration,
-            containerizeWar,
-            inferredAuthProvider,
-            projectProperties,
+            new CommonInput(
+                containerizeWar, rawConfiguration, inferredAuthProvider, projectProperties),
             Containerizer.to(targetImage),
             targetImageReference,
             isTargetImageCredentialPresent);
@@ -179,10 +189,7 @@ public class PluginConfigurationProcessor {
 
   @VisibleForTesting
   static PluginConfigurationProcessor processCommonConfiguration(
-      RawConfiguration rawConfiguration,
-      boolean containerizeWar,
-      InferredAuthProvider inferredAuthProvider,
-      ProjectProperties projectProperties,
+      CommonInput input,
       Containerizer containerizer,
       ImageReference targetImageReference,
       boolean isTargetImageCredentialPresent)
@@ -192,11 +199,10 @@ public class PluginConfigurationProcessor {
     JibSystemProperties.checkHttpTimeoutProperty();
     JibSystemProperties.checkProxyPortProperty();
 
-    ImageReference baseImageReference =
-        ImageReference.parse(getBaseImage(rawConfiguration, containerizeWar));
+    ImageReference baseImageReference = ImageReference.parse(getBaseImage(input));
 
     EventDispatcher eventDispatcher =
-        new DefaultEventDispatcher(projectProperties.getEventHandlers());
+        new DefaultEventDispatcher(input.projectProperties.getEventHandlers());
     if (JibSystemProperties.isSendCredentialsOverHttpEnabled()) {
       eventDispatcher.dispatch(
           LogEvent.warn(
@@ -212,31 +218,30 @@ public class PluginConfigurationProcessor {
             baseImageReference,
             PropertyNames.FROM_AUTH_USERNAME,
             PropertyNames.FROM_AUTH_PASSWORD,
-            rawConfiguration.getFromAuth(),
-            inferredAuthProvider,
-            rawConfiguration.getFromCredHelper().orElse(null));
+            input.rawConfiguration.getFromAuth(),
+            input.inferredAuthProvider,
+            input.rawConfiguration.getFromCredHelper().orElse(null));
 
     JibContainerBuilder jibContainerBuilder =
         Jib.from(baseImage)
-            .setLayers(projectProperties.getJavaLayerConfigurations().getLayerConfigurations())
-            .setEntrypoint(computeEntrypoint(rawConfiguration, containerizeWar, projectProperties))
-            .setProgramArguments(rawConfiguration.getProgramArguments().orElse(null))
-            .setEnvironment(rawConfiguration.getEnvironment())
-            .setExposedPorts(ExposedPortsParser.parse(rawConfiguration.getPorts()))
-            .setVolumes(getVolumesSet(rawConfiguration))
-            .setLabels(rawConfiguration.getLabels())
-            .setUser(rawConfiguration.getUser().orElse(null));
-    getWorkingDirectoryChecked(rawConfiguration)
-        .ifPresent(jibContainerBuilder::setWorkingDirectory);
-    if (rawConfiguration.getUseCurrentTimestamp()) {
+            .setLayers(
+                input.projectProperties.getJavaLayerConfigurations().getLayerConfigurations())
+            .setEntrypoint(computeEntrypoint(input))
+            .setProgramArguments(input.rawConfiguration.getProgramArguments().orElse(null))
+            .setEnvironment(input.rawConfiguration.getEnvironment())
+            .setExposedPorts(ExposedPortsParser.parse(input.rawConfiguration.getPorts()))
+            .setVolumes(getVolumesSet(input))
+            .setLabels(input.rawConfiguration.getLabels())
+            .setUser(input.rawConfiguration.getUser().orElse(null));
+    getWorkingDirectoryChecked(input).ifPresent(jibContainerBuilder::setWorkingDirectory);
+    if (input.rawConfiguration.getUseCurrentTimestamp()) {
       eventDispatcher.dispatch(
           LogEvent.warn(
               "Setting image creation time to current time; your image may not be reproducible."));
       jibContainerBuilder.setCreationTime(Instant.now());
     }
 
-    PluginConfigurationProcessor.configureContainerizer(
-        containerizer, rawConfiguration, projectProperties);
+    PluginConfigurationProcessor.configureContainerizer(input, containerizer);
 
     return new PluginConfigurationProcessor(
         jibContainerBuilder,
@@ -257,25 +262,20 @@ public class PluginConfigurationProcessor {
    *   <li>for a non-WAR project, by resolving the main class
    * </ol>
    *
-   * @param rawConfiguration raw configuration data
-   * @param containerizeWar whether to do WAR containerization
-   * @param projectProperties used for providing additional information
+   * @param input static input including raw configuration data and project properties
    * @return the entrypoint
    * @throws MainClassInferenceException if no valid main class is configured or discovered
    * @throws InvalidAppRootException if {@code appRoot} value is not an absolute Unix path
    */
   @Nullable
   @VisibleForTesting
-  static List<String> computeEntrypoint(
-      RawConfiguration rawConfiguration,
-      boolean containerizeWar,
-      ProjectProperties projectProperties)
+  static List<String> computeEntrypoint(CommonInput input)
       throws MainClassInferenceException, InvalidAppRootException {
-    Optional<List<String>> rawEntrypoint = rawConfiguration.getEntrypoint();
+    Optional<List<String>> rawEntrypoint = input.rawConfiguration.getEntrypoint();
     if (rawEntrypoint.isPresent() && !rawEntrypoint.get().isEmpty()) {
-      if (rawConfiguration.getMainClass().isPresent()
-          || !rawConfiguration.getJvmFlags().isEmpty()) {
-        new DefaultEventDispatcher(projectProperties.getEventHandlers())
+      if (input.rawConfiguration.getMainClass().isPresent()
+          || !input.rawConfiguration.getJvmFlags().isEmpty()) {
+        new DefaultEventDispatcher(input.projectProperties.getEventHandlers())
             .dispatch(
                 LogEvent.warn("mainClass and jvmFlags are ignored when entrypoint is specified"));
       }
@@ -286,16 +286,16 @@ public class PluginConfigurationProcessor {
       return rawEntrypoint.get();
     }
 
-    if (containerizeWar) {
+    if (input.containerizeWar) {
       return null;
     }
 
-    AbsoluteUnixPath appRoot = getAppRootChecked(rawConfiguration, containerizeWar);
+    AbsoluteUnixPath appRoot = getAppRootChecked(input.rawConfiguration, input.containerizeWar);
     String mainClass =
         MainClassResolver.resolveMainClass(
-            rawConfiguration.getMainClass().orElse(null), projectProperties);
+            input.rawConfiguration.getMainClass().orElse(null), input.projectProperties);
     return JavaEntrypointConstructor.makeDefaultEntrypoint(
-        appRoot, rawConfiguration.getJvmFlags(), mainClass);
+        appRoot, input.rawConfiguration.getJvmFlags(), mainClass);
   }
 
   /**
@@ -303,29 +303,29 @@ public class PluginConfigurationProcessor {
    * {@code "gcr.io/distroless/java/jetty"} for WAR packaging or {@code "gcr.io/distroless/java"}
    * for non-WAR packaging.
    *
-   * @param rawConfiguration raw configuration data
-   * @param containerizeWar whether to do WAR containerization
+   * @param input static input including raw configuration data and project properties
    * @return the base image
    */
   @VisibleForTesting
-  static String getBaseImage(RawConfiguration rawConfiguration, boolean containerizeWar) {
-    return rawConfiguration
+  static String getBaseImage(CommonInput input) {
+    return input
+        .rawConfiguration
         .getFromImage()
-        .orElse(containerizeWar ? "gcr.io/distroless/java/jetty" : "gcr.io/distroless/java");
+        .orElse(input.containerizeWar ? "gcr.io/distroless/java/jetty" : "gcr.io/distroless/java");
   }
 
   /**
    * Parses the list of raw volumes directories to a set of {@link AbsoluteUnixPath}
    *
-   * @param rawConfiguration raw configuration data
+   * @param input static input including raw configuration data and project properties
    * @return the set of parsed volumes
    * @throws InvalidContainerVolumeException if {@code volumes} are not valid absolute Unix paths
    */
   @VisibleForTesting
-  static Set<AbsoluteUnixPath> getVolumesSet(RawConfiguration rawConfiguration)
+  static Set<AbsoluteUnixPath> getVolumesSet(CommonInput input)
       throws InvalidContainerVolumeException {
     Set<AbsoluteUnixPath> volumes = new HashSet<>();
-    for (String path : rawConfiguration.getVolumes()) {
+    for (String path : input.rawConfiguration.getVolumes()) {
       try {
         AbsoluteUnixPath absoluteUnixPath = AbsoluteUnixPath.get(path);
         volumes.add(absoluteUnixPath);
@@ -338,13 +338,13 @@ public class PluginConfigurationProcessor {
   }
 
   @VisibleForTesting
-  static Optional<AbsoluteUnixPath> getWorkingDirectoryChecked(RawConfiguration rawConfiguration)
+  static Optional<AbsoluteUnixPath> getWorkingDirectoryChecked(CommonInput input)
       throws InvalidWorkingDirectoryException {
-    if (!rawConfiguration.getWorkingDirectory().isPresent()) {
+    if (!input.rawConfiguration.getWorkingDirectory().isPresent()) {
       return Optional.empty();
     }
 
-    String path = rawConfiguration.getWorkingDirectory().get();
+    String path = input.rawConfiguration.getWorkingDirectory().get();
     try {
       return Optional.of(AbsoluteUnixPath.get(path));
     } catch (IllegalArgumentException ex) {
@@ -397,17 +397,15 @@ public class PluginConfigurationProcessor {
   }
 
   private static ImageReference getGeneratedTargetDockerTag(
-      RawConfiguration rawConfiguration,
-      ProjectProperties projectProperties,
-      HelpfulSuggestions helpfulSuggestions)
+      CommonInput input, HelpfulSuggestions helpfulSuggestions)
       throws InvalidImageReferenceException {
     return ConfigurationPropertyValidator.getGeneratedTargetDockerTag(
-        rawConfiguration.getToImage().orElse(null),
-        new DefaultEventDispatcher(projectProperties.getEventHandlers()),
-        projectProperties.getName(),
-        projectProperties.getVersion().equals("unspecified")
+        input.rawConfiguration.getToImage().orElse(null),
+        new DefaultEventDispatcher(input.projectProperties.getEventHandlers()),
+        input.projectProperties.getName(),
+        input.projectProperties.getVersion().equals("unspecified")
             ? "latest"
-            : projectProperties.getVersion(),
+            : input.projectProperties.getVersion(),
         helpfulSuggestions);
   }
 
@@ -416,28 +414,24 @@ public class PluginConfigurationProcessor {
    * configuration.
    *
    * @param containerizer the {@link Containerizer} to configure
-   * @param rawConfiguration the raw build configuration
-   * @param projectProperties the project properties
    */
-  private static void configureContainerizer(
-      Containerizer containerizer,
-      RawConfiguration rawConfiguration,
-      ProjectProperties projectProperties) {
+  private static void configureContainerizer(CommonInput input, Containerizer containerizer) {
     containerizer
-        .setToolName(projectProperties.getToolName())
-        .setEventHandlers(projectProperties.getEventHandlers())
-        .setAllowInsecureRegistries(rawConfiguration.getAllowInsecureRegistries())
+        .setToolName(input.projectProperties.getToolName())
+        .setEventHandlers(input.projectProperties.getEventHandlers())
+        .setAllowInsecureRegistries(input.rawConfiguration.getAllowInsecureRegistries())
         .setBaseImageLayersCache(
             getCheckedCacheDirectory(
                 PropertyNames.BASE_IMAGE_CACHE,
                 Boolean.getBoolean(PropertyNames.USE_ONLY_PROJECT_CACHE)
-                    ? projectProperties.getDefaultCacheDirectory()
+                    ? input.projectProperties.getDefaultCacheDirectory()
                     : Containerizer.DEFAULT_BASE_CACHE_DIRECTORY))
         .setApplicationLayersCache(
             getCheckedCacheDirectory(
-                PropertyNames.APPLICATION_CACHE, projectProperties.getDefaultCacheDirectory()));
+                PropertyNames.APPLICATION_CACHE,
+                input.projectProperties.getDefaultCacheDirectory()));
 
-    rawConfiguration.getToTags().forEach(containerizer::withAdditionalTag);
+    input.rawConfiguration.getToTags().forEach(containerizer::withAdditionalTag);
   }
 
   /**

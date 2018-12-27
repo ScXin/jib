@@ -62,9 +62,12 @@ public class PluginConfigurationProcessorTest {
   @Mock private ImageReference targetImageReference;
   @Mock private AuthProperty authProperty;
   @Mock private Consumer<LogEvent> logger;
+  private PluginConfigurationProcessor.CommonInput commonInput;
 
   @Before
   public void setUp() {
+    commonInput = newCommonInput(false);
+
     Mockito.when(rawConfiguration.getFromAuth()).thenReturn(authProperty);
     Mockito.when(rawConfiguration.getEntrypoint()).thenReturn(Optional.empty());
     Mockito.when(rawConfiguration.getAppRoot()).thenReturn("/app");
@@ -165,8 +168,7 @@ public class PluginConfigurationProcessorTest {
     Mockito.when(rawConfiguration.getEntrypoint())
         .thenReturn(Optional.of(Collections.singletonList("INHERIT")));
 
-    Assert.assertNull(
-        PluginConfigurationProcessor.computeEntrypoint(rawConfiguration, false, projectProperties));
+    Assert.assertNull(PluginConfigurationProcessor.computeEntrypoint(commonInput));
   }
 
   @Test
@@ -175,8 +177,7 @@ public class PluginConfigurationProcessorTest {
     Mockito.when(rawConfiguration.getEntrypoint())
         .thenReturn(Optional.of(Arrays.asList("INHERIT", "")));
 
-    Assert.assertNotNull(
-        PluginConfigurationProcessor.computeEntrypoint(rawConfiguration, false, projectProperties));
+    Assert.assertNotNull(PluginConfigurationProcessor.computeEntrypoint(commonInput));
   }
 
   @Test
@@ -388,7 +389,7 @@ public class PluginConfigurationProcessorTest {
     Mockito.when(rawConfiguration.getWorkingDirectory()).thenReturn(Optional.of("/valid/path"));
 
     Optional<AbsoluteUnixPath> checkedPath =
-        PluginConfigurationProcessor.getWorkingDirectoryChecked(rawConfiguration);
+        PluginConfigurationProcessor.getWorkingDirectoryChecked(commonInput);
     Assert.assertTrue(checkedPath.isPresent());
     Assert.assertEquals(AbsoluteUnixPath.get("/valid/path"), checkedPath.get());
   }
@@ -397,8 +398,7 @@ public class PluginConfigurationProcessorTest {
   public void testGetWorkingDirectoryChecked_undefined() throws InvalidWorkingDirectoryException {
     Mockito.when(rawConfiguration.getWorkingDirectory()).thenReturn(Optional.empty());
     Assert.assertEquals(
-        Optional.empty(),
-        PluginConfigurationProcessor.getWorkingDirectoryChecked(rawConfiguration));
+        Optional.empty(), PluginConfigurationProcessor.getWorkingDirectoryChecked(commonInput));
   }
 
   @Test
@@ -406,7 +406,7 @@ public class PluginConfigurationProcessorTest {
     Mockito.when(rawConfiguration.getWorkingDirectory()).thenReturn(Optional.of("relative/path"));
 
     try {
-      PluginConfigurationProcessor.getWorkingDirectoryChecked(rawConfiguration);
+      PluginConfigurationProcessor.getWorkingDirectoryChecked(commonInput);
       Assert.fail();
     } catch (InvalidWorkingDirectoryException ex) {
       Assert.assertEquals("relative/path", ex.getMessage());
@@ -417,25 +417,22 @@ public class PluginConfigurationProcessorTest {
   @Test
   public void testGetBaseImage_defaultNonWarPackaging() {
     Assert.assertEquals(
-        "gcr.io/distroless/java",
-        PluginConfigurationProcessor.getBaseImage(rawConfiguration, false));
+        "gcr.io/distroless/java", PluginConfigurationProcessor.getBaseImage(commonInput));
   }
 
   @Test
   public void testGetBaseImage_defaultWarProject() {
     Assert.assertEquals(
         "gcr.io/distroless/java/jetty",
-        PluginConfigurationProcessor.getBaseImage(rawConfiguration, true));
+        PluginConfigurationProcessor.getBaseImage(newCommonInput(true)));
   }
 
   @Test
   public void testGetBaseImage_nonDefault() {
     Mockito.when(rawConfiguration.getFromImage()).thenReturn(Optional.of("tomcat"));
 
-    Assert.assertEquals(
-        "tomcat", PluginConfigurationProcessor.getBaseImage(rawConfiguration, false));
-    Assert.assertEquals(
-        "tomcat", PluginConfigurationProcessor.getBaseImage(rawConfiguration, true));
+    Assert.assertEquals("tomcat", PluginConfigurationProcessor.getBaseImage(commonInput));
+    Assert.assertEquals("tomcat", PluginConfigurationProcessor.getBaseImage(newCommonInput(true)));
   }
 
   @Test
@@ -444,7 +441,7 @@ public class PluginConfigurationProcessorTest {
 
     Assert.assertEquals(
         ImmutableSet.of(AbsoluteUnixPath.get("/some/root")),
-        PluginConfigurationProcessor.getVolumesSet(rawConfiguration));
+        PluginConfigurationProcessor.getVolumesSet(commonInput));
   }
 
   @Test
@@ -452,12 +449,17 @@ public class PluginConfigurationProcessorTest {
     Mockito.when(rawConfiguration.getVolumes()).thenReturn(Collections.singletonList("`some/root"));
 
     try {
-      PluginConfigurationProcessor.getVolumesSet(rawConfiguration);
+      PluginConfigurationProcessor.getVolumesSet(commonInput);
       Assert.fail();
     } catch (InvalidContainerVolumeException ex) {
       Assert.assertEquals("`some/root", ex.getMessage());
       Assert.assertEquals("`some/root", ex.getInvalidVolume());
     }
+  }
+
+  private PluginConfigurationProcessor.CommonInput newCommonInput(boolean doWarContainerization) {
+    return new PluginConfigurationProcessor.CommonInput(
+        doWarContainerization, rawConfiguration, ignored -> Optional.empty(), projectProperties);
   }
 
   private PluginConfigurationProcessor createPluginConfigurationProcessor(
@@ -466,12 +468,6 @@ public class PluginConfigurationProcessorTest {
           InferredAuthRetrievalException, IOException, InvalidWorkingDirectoryException,
           InvalidContainerVolumeException {
     return PluginConfigurationProcessor.processCommonConfiguration(
-        rawConfiguration,
-        doWarContainerization,
-        ignored -> Optional.empty(),
-        projectProperties,
-        containerizer,
-        targetImageReference,
-        false);
+        newCommonInput(doWarContainerization), containerizer, targetImageReference, false);
   }
 }
